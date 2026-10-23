@@ -9,7 +9,7 @@ app = FastAPI()
 # Allow React frontend to communicate with this backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[*],
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
