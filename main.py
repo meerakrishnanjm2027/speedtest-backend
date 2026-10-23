@@ -5,7 +5,7 @@ import os
 import requests
 
 app = FastAPI()
-
+const API_URL = 'https://speedtest-backend-ofvb.onrender.com';
 # Allow React frontend to communicate with this backend
 app.add_middleware(
     CORSMiddleware,
