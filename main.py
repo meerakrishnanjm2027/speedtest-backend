@@ -5,12 +5,12 @@ import os
 import requests
 
 app = FastAPI()
-const API_URL = 'https://speedtest-backend-ofvb.onrender.com';
+
 # Allow React frontend to communicate with this backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=False, # Changed to False to fix CORS on Netlify
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -55,19 +55,25 @@ async def upload(file: UploadFile = File(...)):
 async def get_network_info(request: Request):
     """
     Fetches the *client's* public IP, ISP, and City using ipapi.co.
-
-    Note: We pass the client's real IP (from X-Forwarded-For, set by
-    Render's proxy) to ipapi.co. Without this, the API would return
-    Render's server IP → "Amazon Technologies Inc." instead of the
-    user's actual ISP like "Jio" or "ACT Fibernet".
     """
     try:
         # Get the client IP from the proxy headers (Render sets this)
         forwarded = request.headers.get("x-forwarded-for")
         user_ip = forwarded.split(",")[0].strip() if forwarded else request.client.host
 
-        # Look up the client's IP (not the server's)
-        response = requests.get(f"https://ipapi.co/{user_ip}/json/", timeout=5)
+        # If testing locally, the IP will be 127.0.0.1 and fail. 
+        # This fixes that so it works locally AND on Render.
+        is_private = (
+            user_ip in ("127.0.0.1", "::1", "localhost")
+            or user_ip.startswith("192.168.")
+            or user_ip.startswith("10.")
+            or user_ip.startswith("172.")
+        )
+
+        url = "https://ipapi.co/json/" if is_private else f"https://ipapi.co/{user_ip}/json/"
+        
+        # Look up the client's IP
+        response = requests.get(url, timeout=5)
         data = response.json()
 
         return {
@@ -76,7 +82,7 @@ async def get_network_info(request: Request):
             "city": data.get("city", "Unknown"),
             "region": data.get("region", ""),
             "country": data.get("country_name", ""),
-            "server_location": "Render Cloud (Global)",
+            "server_location": "Local Dev" if is_private else "Render Cloud (Global)",
             "server_name": "SpeedTest-Backend-v2",
         }
     except Exception as e:
