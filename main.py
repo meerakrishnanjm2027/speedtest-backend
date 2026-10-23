@@ -9,7 +9,10 @@ app = FastAPI()
 # Allow React frontend to communicate with this backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict this to your React URL
+    allow_origins=[
+        "https://interifty.netlify.app",  # your Netlify domain
+        "http://localhost:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
