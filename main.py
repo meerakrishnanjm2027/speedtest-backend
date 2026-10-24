@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, Query
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import secrets
 import time
@@ -8,63 +8,84 @@ import requests
 app = FastAPI(title="Personal Speed Test API")
 
 # --- CORS Configuration ---
-# Allows your Vercel/Netlify frontend to communicate with this Render backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace "*" with your specific frontend URL
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # --- Helper: Fast Random Data Generation ---
-# Uses secrets.token_bytes which is faster than os.urandom for streaming
 def generate_random_data(size: int):
-    chunk_size = 65536  # 64KB chunks are optimal for TCP throughput
+    chunk_size = 65536
     generated = 0
     while generated < size:
         to_generate = min(chunk_size, size - generated)
         yield secrets.token_bytes(to_generate)
         generated += to_generate
 
-# --- 1. Network Info Endpoint (Optimized) ---
+# --- 1. Network Info Endpoint (Dual-API Fallback) ---
 @app.get("/network-info")
 async def get_network_info():
     """
-    Fetches client IP, ISP, and Location using ipinfo.io.
-    Includes fallback logic if the API is rate-limited or unreachable.
+    Tries ip-api.com first, falls back to ipinfo.io.
+    ALWAYS returns consistent keys: ip, isp, city, region, country
     """
-    try:
-        response = requests.get("https://ipinfo.io/json", timeout=5)
-        
-        if response.status_code == 200:
-            data = response.json()
-            return {
-                "ip": data.get("ip", "N/A"),
-                "isp": data.get("org", "Unknown ISP"),
-                "city": data.get("city", "Unknown"),
-                "region": data.get("region", ""),
-                "country": data.get("country", ""),
-                "server_location": "Render Cloud (Global)",
-                "server_name": "SpeedTest-Backend-v2"
+    apis = [
+        {
+            "name": "ip-api.com",
+            "url": "http://ip-api.com/json/?fields=status,message,country,regionName,city,isp,query",
+            "parser": lambda d: {
+                "ip": d.get("query"),
+                "isp": d.get("isp"),
+                "city": d.get("city"),
+                "region": d.get("regionName"),
+                "country": d.get("country")
+            } if d.get("status") == "success" else None
+        },
+        {
+            "name": "ipinfo.io",
+            "url": "https://ipinfo.io/json",
+            "parser": lambda d: {
+                "ip": d.get("ip"),
+                "isp": d.get("org"),  # ipinfo uses 'org' instead of 'isp'
+                "city": d.get("city"),
+                "region": d.get("region"),
+                "country": d.get("country")
             }
-        else:
-            # Handle API errors gracefully
-            return {
-                "ip": "Unavailable",
-                "isp": "API Rate Limit Reached",
-                "city": "Try again later",
-                "server_location": "Render Cloud (Global)"
-            }
-            
-    except requests.exceptions.RequestException as e:
-        # Handle network timeouts or DNS failures
-        return {
-            "ip": "Error",
-            "isp": "Connection Failed",
-            "city": str(e)[:50],
-            "server_location": "Render Cloud (Global)"
         }
+    ]
+    
+    for api in apis:
+        try:
+            resp = requests.get(api["url"], timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                parsed = api["parser"](data)
+                
+                # Only return if we got a valid IP address
+                if parsed and parsed.get("ip"):
+                    print(f"[NETWORK] ✅ Success via {api['name']}")
+                    return {
+                        **parsed,
+                        "server_location": "Render Cloud (Global)",
+                        "server_name": "SpeedTest-Backend-v2"
+                    }
+        except Exception as e:
+            print(f"[NETWORK] ❌ Failed {api['name']}: {e}")
+            continue
+    
+    # All APIs failed
+    print("[NETWORK] ️ All APIs unreachable")
+    return {
+        "ip": "Unavailable",
+        "isp": "All APIs Unreachable",
+        "city": "Check Render Logs",
+        "region": "",
+        "country": "",
+        "server_location": "Render Cloud (Global)"
+    }
 
 # --- 2. Ping Test ---
 @app.get("/ping")
@@ -77,10 +98,6 @@ async def download(
     size: int = Query(default=25000000), 
     connections: int = Query(default=1)
 ):
-    """
-    Streams random bytes for download testing.
-    'connections' param tells frontend how many parallel streams to open.
-    """
     return StreamingResponse(
         generate_random_data(size), 
         media_type="application/octet-stream",
@@ -96,19 +113,15 @@ async def upload(file: UploadFile = File(...)):
 # --- 5. Test Configuration ---
 @app.get("/config")
 async def get_config():
-    """
-    Tells the frontend exactly how to run the test for maximum accuracy.
-    Matches industry standards like Ookla.
-    """
     return {
         "download": {
             "sizes": [1000000, 5000000, 25000000],
-            "threads": 4,       # Use 4 parallel connections
-            "warmup_time": 2    # Ignore first 2 seconds (ramp-up phase)
+            "threads": 4,
+            "warmup_time": 2
         },
         "upload": {
             "sizes": [1000000, 5000000, 10000000],
-            "threads": 3,       # Use 3 parallel connections
+            "threads": 3,
             "warmup_time": 2
         }
     }
