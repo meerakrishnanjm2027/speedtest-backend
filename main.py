@@ -25,17 +25,21 @@ def generate_random_data(size: int):
         yield secrets.token_bytes(to_generate)
         generated += to_generate
 
-# --- 1. Network Info Endpoint (Dual-API Fallback) ---
+# --- 1. Network Info Endpoint (Fixed for Client IP) ---
 @app.get("/network-info")
-async def get_network_info():
+async def get_network_info(client_ip: str = None):
     """
-    Tries ip-api.com first, falls back to ipinfo.io.
-    ALWAYS returns consistent keys: ip, isp, city, region, country
+    Looks up network info for the provided client_ip.
+    If no IP is provided, falls back to server's own IP (for debugging).
+    Uses dual-API fallback for reliability.
     """
+    target_ip = client_ip if client_ip else None
+    
+    # APIs to try (in order of reliability for specific IPs)
     apis = [
         {
             "name": "ip-api.com",
-            "url": "http://ip-api.com/json/?fields=status,message,country,regionName,city,isp,query",
+            "url": f"http://ip-api.com/json/{target_ip or ''}?fields=status,message,country,regionName,city,isp,query",
             "parser": lambda d: {
                 "ip": d.get("query"),
                 "isp": d.get("isp"),
@@ -46,7 +50,7 @@ async def get_network_info():
         },
         {
             "name": "ipinfo.io",
-            "url": "https://ipinfo.io/json",
+            "url": f"https://ipinfo.io/{target_ip or 'json'}",
             "parser": lambda d: {
                 "ip": d.get("ip"),
                 "isp": d.get("org"),  # ipinfo uses 'org' instead of 'isp'
@@ -64,9 +68,9 @@ async def get_network_info():
                 data = resp.json()
                 parsed = api["parser"](data)
                 
-                # Only return if we got a valid IP address
-                if parsed and parsed.get("ip"):
-                    print(f"[NETWORK] ✅ Success via {api['name']}")
+                # Validate we got a real, non-loopback IP back
+                if parsed and parsed.get("ip") and parsed["ip"] != "127.0.0.1":
+                    print(f"[NETWORK] ✅ Success via {api['name']} for IP: {parsed['ip']}")
                     return {
                         **parsed,
                         "server_location": "Render Cloud (Global)",
@@ -77,11 +81,11 @@ async def get_network_info():
             continue
     
     # All APIs failed
-    print("[NETWORK] ️ All APIs unreachable")
+    print("[NETWORK] ⚠️ All APIs unreachable")
     return {
         "ip": "Unavailable",
-        "isp": "All APIs Unreachable",
-        "city": "Check Render Logs",
+        "isp": "Lookup Failed",
+        "city": "Check Logs",
         "region": "",
         "country": "",
         "server_location": "Render Cloud (Global)"
