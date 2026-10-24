@@ -25,17 +25,28 @@ def generate_random_data(size: int):
         yield secrets.token_bytes(to_generate)
         generated += to_generate
 
-# --- 1. Network Info Endpoint (Dual-API Fallback) ---
+# --- 1. Network Info Endpoint (FIXED) ---
 @app.get("/network-info")
-async def get_network_info():
+async def get_network_info(client_ip: str = None):
     """
-    Tries ip-api.com first, falls back to ipinfo.io.
-    ALWAYS returns consistent keys: ip, isp, city, region, country
+    CRITICAL FIX: Now correctly uses the client_ip parameter 
+    passed from the frontend instead of defaulting to server IP.
     """
+    # ✅ FIX: Use the provided IP, don't let it be None
+    target_ip = client_ip
+    
+    # If no IP was provided, fallback to auto-detect (for debugging only)
+    if not target_ip:
+        print("[NETWORK] ⚠️ No client_ip provided, using server IP")
+        target_ip = ""  # Empty string tells ip-api to use requester IP
+    
+    print(f"[NETWORK] 🔍 Looking up info for IP: {target_ip}")
+    
+    # APIs to try (in order of reliability)
     apis = [
         {
             "name": "ip-api.com",
-            "url": "http://ip-api.com/json/?fields=status,message,country,regionName,city,isp,query",
+            "url": f"http://ip-api.com/json/{target_ip}?fields=status,message,country,regionName,city,isp,query",
             "parser": lambda d: {
                 "ip": d.get("query"),
                 "isp": d.get("isp"),
@@ -46,10 +57,10 @@ async def get_network_info():
         },
         {
             "name": "ipinfo.io",
-            "url": "https://ipinfo.io/json",
+            "url": f"https://ipinfo.io/{target_ip}/json",
             "parser": lambda d: {
                 "ip": d.get("ip"),
-                "isp": d.get("org"),  # ipinfo uses 'org' instead of 'isp'
+                "isp": d.get("org"),
                 "city": d.get("city"),
                 "region": d.get("region"),
                 "country": d.get("country")
@@ -64,9 +75,14 @@ async def get_network_info():
                 data = resp.json()
                 parsed = api["parser"](data)
                 
-                # Only return if we got a valid IP address
+                # ✅ Validate we got the CORRECT IP back (not server IP)
                 if parsed and parsed.get("ip"):
-                    print(f"[NETWORK] ✅ Success via {api['name']}")
+                    # If we sent a specific IP, verify the response matches
+                    if target_ip and parsed["ip"] != target_ip:
+                        print(f"[NETWORK] ⚠️ IP mismatch! Sent: {target_ip}, Got: {parsed['ip']}")
+                        continue
+                    
+                    print(f"[NETWORK] ✅ Success via {api['name']} for IP: {parsed['ip']}")
                     return {
                         **parsed,
                         "server_location": "Render Cloud (Global)",
@@ -76,12 +92,10 @@ async def get_network_info():
             print(f"[NETWORK] ❌ Failed {api['name']}: {e}")
             continue
     
-    # All APIs failed
-    print("[NETWORK] ️ All APIs unreachable")
     return {
         "ip": "Unavailable",
-        "isp": "All APIs Unreachable",
-        "city": "Check Render Logs",
+        "isp": "Lookup Failed",
+        "city": "Check Logs",
         "region": "",
         "country": "",
         "server_location": "Render Cloud (Global)"
